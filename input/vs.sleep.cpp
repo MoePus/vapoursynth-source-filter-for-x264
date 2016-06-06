@@ -14,7 +14,6 @@ extern "C"{
 #include "vs-include\VSScript.h"
 #include <iostream>
 #include <string>
-#include <thread>
 #include <condition_variable>
 #include <codecvt>
 #include <algorithm>
@@ -93,10 +92,8 @@ typedef struct
     int bit_depth = 0;
 	int num_frames = 0;
 	int totalThreads = 0;
-	std::mutex mtx;
-	std::condition_variable cv;
-	std::mutex mtx2;
-	std::condition_variable cv2;
+	clock_t timer = 0;
+	int interval = 0;
 } vs_hnd_t;
 
 typedef struct
@@ -112,17 +109,27 @@ static void VS_CC frameDoneCallback(void *userData, const VSFrameRef *frame, int
     h->reorderMap.insert(std::make_pair(n,frame));
 	//x264_log( NULL, X264_LOG_INFO, "Vapoursynth prepared the %d frame.\n", n );
 	
-	if(h->requestedFrames > h->fetchedFrames)
+	if(h->requestedFrames % h->totalThreads == 0)
 	{
-		h->cv2.notify_all();
-		if(h->requestedFrames - h->fetchedFrames > h->totalThreads * 8)
+		if(h->timer == 0)
 		{
-			std::unique_lock<std::mutex> locker(h->mtx);
-			h->cv.wait(locker, [h]{return h->requestedFrames - h->fetchedFrames> h->totalThreads * 7;});
+			h->timer = clock();
+		}else
+		{
+			h->interval = clock() - h->timer;
+			h->timer = clock();
 		}
-	}
 		
+		
+	}
 	
+	int sleepTime = h->interval * 4.5 * 1000 / CLOCKS_PER_SEC;
+	while(h->requestedFrames - h->fetchedFrames > h->totalThreads * 11)
+	{
+		Sleep(sleepTime);
+	}
+	
+
 	if(h->requestedFrames< h->num_frames)
 	{
 		h->vsapi->getFrameAsync(h->requestedFrames++, h->node, frameDoneCallback, h);	
@@ -243,23 +250,24 @@ static int open_file( char *psz_filename, hnd_t *p_handle, video_info_t *info, c
 static int read_frame( cli_pic_t *pic, hnd_t handle, int i_frame )
 {
 	vs_hnd_t *h = (vs_hnd_t*)handle;
-	
-	
-	h->cv.notify_one();
-	
 	const int rgbRemap[] = { 1, 2, 0 };
 	//x264_log( NULL, X264_LOG_INFO, "X264 requests the %d frame.\n", i_frame );
 	if(i_frame >= h->num_frames)
 		return -1;
 	
-	if(!h->reorderMap.count(i_frame))
+	int trf = h->requestedFrames;
+	if(i_frame > trf)
 	{
-		std::unique_lock<std::mutex> locker(h->mtx2);
-		h->cv2.wait(locker, [h,i_frame]{return h->reorderMap.count(i_frame)!=0;});
+		int sleepTime = h->interval * (i_frame - trf ) * 1000 / h->totalThreads / CLOCKS_PER_SEC;
+		Sleep(sleepTime);
 	}
-
 	
-	if(1)
+	while(!h->reorderMap.count(i_frame))
+	{
+		Sleep(15);
+	}
+	
+	if(h->reorderMap.count(i_frame))
 	{
 		h->fetchedFrames = i_frame;
 		const VSFrameRef *frame = h->reorderMap[i_frame];
