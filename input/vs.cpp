@@ -115,10 +115,14 @@ static void VS_CC frameDoneCallback(void *userData, const VSFrameRef *frame, int
 	if(h->requestedFrames > h->fetchedFrames)
 	{
 		h->cv2.notify_all();
-		if(h->requestedFrames - h->fetchedFrames > h->totalThreads * 8)
+		if(h->requestedFrames - h->fetchedFrames > h->totalThreads * 32)
 		{
 			std::unique_lock<std::mutex> locker(h->mtx);
-			h->cv.wait(locker, [h]{return h->requestedFrames - h->fetchedFrames> h->totalThreads * 7;});
+			h->cv.wait(locker, [h]{return h->requestedFrames - h->fetchedFrames <= h->totalThreads * 4;});
+			/*while(h->requestedFrames - h->fetchedFrames > h->totalThreads * 2)
+			{
+				h->cv.wait(locker);
+			}*/
 		}
 	}
 		
@@ -256,6 +260,10 @@ static int read_frame( cli_pic_t *pic, hnd_t handle, int i_frame )
 	{
 		std::unique_lock<std::mutex> locker(h->mtx2);
 		h->cv2.wait(locker, [h,i_frame]{return h->reorderMap.count(i_frame)!=0;});
+		/*while(h->reorderMap.count(i_frame)==0)
+		{
+			h->cv2.wait(locker);
+		}*/
 	}
 
 	
